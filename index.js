@@ -5,6 +5,7 @@ const cors = require('cors')
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const qr = require('qr-image');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -46,7 +47,10 @@ const storage = multer.diskStorage({
 
 const upload = multer({storage: storage });
 
+let lastQR = null;
+
 client.on('qr', qr => {
+    lastQR = qr;
     qrcode.generate(qr, { small: true });
 });
 
@@ -80,6 +84,27 @@ app.post('/send-message', upload.single('image'), (req, res) => {
     fs.unlinkSync(imageFilePath);
 
     res.send(`Mensaje enviado a los números: ${numbers}`);
+});
+
+app.get('/qr', (req, res) => {
+    if (!lastQR) {
+        return res.status(404).send('QR Code not available yet. Please wait for client initialization.');
+    }
+
+    try {
+        const qr_svg = qr.image(lastQR, { type: 'png' });
+        res.type('png');
+        qr_svg.pipe(res);
+    } catch (err) {
+        res.status(500).send('Error generating QR code');
+    }
+});
+
+app.get('/status', (req, res) => {
+    res.json({
+        connected: client.info ? true : false,
+        lastQR: lastQR ? true : false
+    });
 });
 
 app.listen(port, () => {
