@@ -1,14 +1,23 @@
 const qrcode = require('qrcode-terminal');
 const qr = require('qr-image');
-const client = require('../config/whatsapp');
+const { initializeClient } = require('../config/whatsapp');
 
 let lastQR = null;
+let client = null;
 
-class WhatsAppService {
-    initialize() {
-        client.on('qr', this.handleQR);
-        client.on('ready', this.handleReady);
-        client.initialize();
+class WhatsAppService { 
+    async initialize() {
+        try {
+            client = await initializeClient();
+
+            client.on('qr', this.handleQR);
+            client.on('ready', this.handleReady);
+
+            await client.initialize();
+        } catch (error) {
+            console.error('Error initializing WhatsApp service:', error);
+            throw error;
+        }
     }
 
     handleQR(qr) {
@@ -21,6 +30,9 @@ class WhatsAppService {
     }
 
     async sendMessage(number, message) {
+        if (!client) {
+            throw new Error('WhatsApp client not initialized');
+        }
         const chatId = `${number}@c.us`;
         return await client.sendMessage(chatId, message);
     }
@@ -34,4 +46,4 @@ class WhatsAppService {
     }
 }
 
-module.exports = new WhatsAppService(); 
+module.exports = new WhatsAppService();

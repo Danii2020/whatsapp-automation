@@ -52,8 +52,5 @@ RUN npm install
 # Bundle app source
 COPY . .
 
-# Create uploads directory
-RUN mkdir uploads
-
 EXPOSE 3000
 CMD [ "node", "index.js" ] 
