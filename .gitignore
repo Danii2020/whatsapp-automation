@@ -146,4 +146,4 @@ dist
 .wwebjs_cache/
 session/
 uploads/
-..wwebjs_auth/
+.wwebjs_auth/
