@@ -1,4 +1,4 @@
-FROM node:18
+FROM node:18 
 
 # Install Chrome dependencies
 RUN apt-get update && apt-get install -y \
@@ -47,7 +47,7 @@ WORKDIR /usr/src/app
 
 # Install app dependencies
 COPY package*.json ./
-RUN npm install
+RUN rm -rf node_modules && npm install
 
 # Bundle app source
 COPY . .
