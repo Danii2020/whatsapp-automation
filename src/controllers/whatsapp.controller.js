@@ -20,7 +20,7 @@ class WhatsAppController {
 
     getQR(req, res) {
         const lastQR = whatsappService.getLastQR();
-        
+
         if (!lastQR) {
             return res.status(404).send('QR Code not available yet. Please wait for client initialization.');
         }
@@ -35,4 +35,4 @@ class WhatsAppController {
     }
 }
 
-module.exports = new WhatsAppController(); 
+module.exports = new WhatsAppController();

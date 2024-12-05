@@ -5,4 +5,4 @@ const whatsappController = require('../controllers/whatsapp.controller');
 router.post('/send-message', whatsappController.sendMessage);
 router.get('/qr', whatsappController.getQR);
 
-module.exports = router; 
+module.exports = router;

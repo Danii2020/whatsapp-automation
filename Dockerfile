@@ -1,4 +1,4 @@
-FROM node:18 
+FROM node:18
 
 # Install Chrome dependencies
 RUN apt-get update && apt-get install -y \
@@ -53,4 +53,4 @@ RUN rm -rf node_modules && npm install
 COPY . .
 
 EXPOSE 3000
-CMD [ "node", "index.js" ] 
+CMD [ "node", "index.js" ]
