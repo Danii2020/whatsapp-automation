@@ -147,3 +147,4 @@ dist
 session/
 uploads/
 .wwebjs_auth/
+RemoteAuth.zip
