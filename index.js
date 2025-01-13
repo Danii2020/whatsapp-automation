@@ -1,37 +1,136 @@
 const express = require('express');
-const { Client, MessageMedia, LocalAuth } = require('whatsapp-web.js');
+const { Client, MessageMedia, LocalAuth, RemoteAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const cors = require('cors')
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const qr = require('qr-image');
+const { MongoStore } = require('wwebjs-mongo');
+const mongoose = require('mongoose');
+require('dotenv').config()
+
+// Store clients in a Map with their IDs
+const clients = new Map();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8000;
+
+
+const mongoUsername = process.env.MONGO_USERNAME
+const mongoPassword = process.env.MONGO_PASSWORD
+const mongoCluster = process.env.MONGO_CLUSTER
+
+mongoose.set('debug', true);
 
 const uploadsDir = 'uploads';
 if (!fs.existsSync(uploadsDir)){
     fs.mkdirSync(uploadsDir);
 }
 
-const client = new Client({
-    authStrategy: new LocalAuth({
-        dataPath: 'session'
-    }),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu'
-        ]
-    }
+const clientSchema = new mongoose.Schema({
+    clientId: { type: String, required: true, unique: true },
+    sessionCollection: { type: String, required: true }
 });
+
+const ClientModel = mongoose.model('Client', clientSchema);
+
+const getClientData = async (clientId) => {
+    if (!mongoose.connection.readyState) {
+        console.log('MongoDB connection not established. Connecting...');
+        await mongoose.connect(
+            `mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`,
+            { useNewUrlParser: true, useUnifiedTopology: true }
+        );
+    }
+    return await ClientModel.findOne({ clientId });
+};
+
+const loadClientsInMemory = async (clientId) => {
+    clients.set(await getClientData(clientId))
+}
+
+
+const saveClientInfo = async (clientId, sessionCollection) => {
+    if (!mongoose.connection.readyState) {
+        console.log('MongoDB connection not established. Connecting...');
+        await mongoose.connect(
+            `mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`,
+            { useNewUrlParser: true, useUnifiedTopology: true }
+        );
+    }
+    await ClientModel.findOneAndUpdate(
+        { clientId },
+        { clientId, sessionCollection },
+        { upsert: true, new: true }
+    );
+};// Modified client creation function
+const createClient = async (clientId) => {
+    // Conectar a la base de datos
+    await mongoose.connect(`mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`);
+
+    // Nombre dinámico para la colección de sesiones
+    const collectionName = `sessions_${clientId}`;
+    const store = new MongoStore({
+        mongoose: mongoose,
+        collectionName: collectionName,
+    });
+
+    // Crear cliente de WhatsApp con configuración
+    const client = new Client({ 
+        authStrategy: new RemoteAuth({
+            store: store,
+            backupSyncIntervalMs: 300000,
+            clientId: clientId
+        }),
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu',
+            ],
+        },
+    });
+
+    // Verifica si el cliente ya está en memoria, de lo contrario, inicializa su estructura
+    if (!clients.has(clientId)) {
+        clients.set(clientId, {});
+    }
+
+    // Crear una promesa para manejar la generación del QR code
+    const qrPromise = new Promise((resolve) => {
+        client.on('qr', qr => {
+            console.log(`QR Code received for client ${clientId}`);
+            clients.get(clientId).qrCode = qr;
+            resolve(qr);
+        });
+    });
+
+    client.on('ready', () => {
+        console.log(`Client ${clientId} is ready!`);
+        clients.get(clientId).qrCode = null;
+    });
+
+    client.on('remote_session_saved', () => {
+        console.log("Session saved!")
+    });
+
+    client.initialize();
+    clients.set(clientId, {
+        client,
+        qrCode: null,
+        qrPromise
+    });
+    await saveClientInfo(clientId, collectionName)
+
+    return client;
+};
+
 
 app.use(express.json());
 app.use(cors())
@@ -47,63 +146,196 @@ const storage = multer.diskStorage({
 
 const upload = multer({storage: storage });
 
-let lastQR = null;
+app.post('/create-client/:clientId', async (req, res) => {
+    const { clientId } = req.params;
 
-client.on('qr', qr => {
-    lastQR = qr;
-    qrcode.generate(qr, { small: true });
+    if (clients.has(clientId)) {
+        return res.status(400).send('Client ID already exists in memory');
+    }
+
+    const existingClient = await getClientData(clientId);
+    
+    if (existingClient) {
+        return res.status(400).send('Client ID already exists');
+    }
+
+    await createClient(clientId);
+    res.send(`Client ${clientId} created successfully`);
 });
 
-client.on('ready', () => {
-    console.log('Client is ready!');
+app.get('/qr/:clientId', async (req, res) => {
+    const { clientId } = req.params;
+    // await loadClientsInMemory(clientId)
+    const clientData = clients.get(clientId);
+    if (clientData) {
+        clientData.qrPromise.then((a) => console.log(a))
+    }
+
+    if (!clientData) {
+        return res.status(404).send('Client not found');
+    }
+
+    try {
+        const qrCode = await Promise.race([
+            clientData.qrPromise,
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('QR Code generation timeout')), 30000)
+            )
+        ]);
+
+        const qr_svg = qr.image(qrCode, { type: 'png' });
+        res.type('png');
+        qr_svg.pipe(res);
+    } catch (err) {
+        if (err.message === 'QR Code generation timeout') {
+            res.status(408).send('QR Code generation timed out. Please try again.');
+        } else {
+            res.status(500).send('Error generating QR code');
+        }
+    }
 });
 
-client.initialize();
-
-app.post('/send-message', upload.single('image'), (req, res) => {
+app.post('/send-message-test/:clientId', (req, res) => {
+    const { clientId } = req.params;
     const { numbers, message } = req.body;
-    const imageFilePath = req.file.path
+    const clientData = clients.get(clientId);
+
+    if (!clientData) {
+        return res.status(404).send('Client not found');
+    }
+
+    if (!numbers || !message) {
+        return res.status(400).send('Missing parameters: numbers, message or image');
+    }
+
+    numbers.forEach(number => {
+        const chatId = `${number}@c.us`;
+        clientData.client.sendMessage(chatId, { caption: message })
+            .then(response => {
+                console.log(`Message sent to ${number} from client ${response.from}`);
+            })
+            .catch(error => {
+                console.error(`Could not send message to ${number} from client ${clientId}:`, error);
+            });
+    });
+    res.send(`Message sent to numbers: ${numbers} from client ${clientId}`);
+});
+
+app.post('/send-message/:clientId', upload.single('image'), async (req, res) => {
+    const { clientId } = req.params;
+    const { numbers, message } = req.body;
+    const imageFilePath = req.file.path;
+    const clientData = clients.get(clientId);
+
+    if (!clientData) {
+        return res.status(404).send('Client not found');
+    }
 
     if (!numbers || !message || !imageFilePath) {
-        return res.status(400).send('Faltan parámetros: numbers, message o image');
+        return res.status(400).send('Missing parameters: numbers, message or image');
     }
 
     const media = MessageMedia.fromFilePath(imageFilePath);
 
-    numbers .forEach(number => {
+    numbers.forEach(number => {
         const chatId = `${number}@c.us`;
-        client.sendMessage(chatId, media, { caption: message })
+        clientData.client.sendMessage(chatId, media, { caption: message })
             .then(response => {
-                console.log(`Mensaje enviado a ${number}`);
+                console.log(`Message sent to ${number} from client ${clientId}`);
             })
             .catch(error => {
-                console.error(`No se pudo enviar el mensaje a ${number}:`, error);
+                console.error(`Could not send message to ${number} from client ${clientId}:`, error);
             });
     });
 
     fs.unlinkSync(imageFilePath);
-
-    res.send(`Mensaje enviado a los números: ${numbers}`);
+    res.send(`Message sent to numbers: ${numbers} from client ${clientId}`);
 });
 
-app.get('/qr', (req, res) => {
-    if (!lastQR) {
-        return res.status(404).send('QR Code not available yet. Please wait for client initialization.');
-    }
-
+const initializeClient = async (clientId) => {
     try {
-        const qr_svg = qr.image(lastQR, { type: 'png' });
-        res.type('png');
-        qr_svg.pipe(res);
-    } catch (err) {
-        res.status(500).send('Error generating QR code');
+        const mongoUsername = process.env.MONGO_USERNAME
+        const mongoPassword = process.env.MONGO_PASSWORD
+        const mongoCluster = process.env.MONGO_CLUSTER
+        await mongoose.connect(`mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`);
+
+        const store = new MongoStore({ mongoose: mongoose });
+
+        const client = new Client({ 
+            authStrategy: new RemoteAuth({
+                store: store,
+                backupSyncIntervalMs: 300000,
+                clientId: clientId
+            }),
+            puppeteer: {
+                headless: true,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu',
+                ],
+            },
+        });
+        return client;
+    } catch (error) {
+        console.error('Failed to initialize WhatsApp client:', error);
+        throw error;
+    }
+};
+
+app.get('/create-session/:clientId', async (req, res) => {
+    const { clientId } = req.params;
+    const client = await initializeClient(clientId)
+    try {
+        if (!clients.has(clientId)) {
+            clients.set(clientId, {});
+        }
+    
+        const qrPromise = new Promise((resolve) => {
+            client.on('qr', qr => {
+                console.log(`QR Code received for client ${clientId}`);
+                clients.get(clientId).qrCode = qr;
+                resolve(qr);
+            });
+        });
+    
+        client.on('ready', () => {
+            console.log(`Client ${clientId} is ready!`);
+            clients.get(clientId).qrCode = null;
+        });
+    
+        client.initialize();
+        clients.set(clientId, {
+            client,
+            qrCode: null,
+            qrPromise
+        });
+        if (client && clients.get(clientId)) {
+            res.send({message: `Client ${clientId} initialized successfully`});
+        } else {
+            res.send({message: "Client not found, not initialiazed"})
+        }
+    } catch (error) {
+        console.error('Failed to initialize WhatsApp client:', error);
+        throw error;
     }
 });
 
-app.get('/status', (req, res) => {
+app.get('/status/:clientId', (req, res) => {
+    const { clientId } = req.params;
+    const clientData = clients.get(clientId);
+
+    if (!clientData) {
+        return res.status(404).send('Client not found');
+    }
+
     res.json({
-        connected: client.info ? true : false,
-        lastQR: lastQR ? true : false
+        connected: clientData.client.info ? true : false,
+        qrCode: clientData.qrCode ? true : false
     });
 });
 
