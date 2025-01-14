@@ -11,7 +11,7 @@ USER chrome
 COPY --chown=chrome:chrome package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN rm -rf node_modules && npm install
 
 # Copy the rest of your app files into the container
 COPY --chown=chrome:chrome . .
