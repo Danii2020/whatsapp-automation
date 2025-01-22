@@ -1,6 +1,5 @@
 const express = require('express');
-const { Client, MessageMedia, LocalAuth, RemoteAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const { Client, MessageMedia, RemoteAuth } = require('whatsapp-web.js');
 const cors = require('cors')
 const multer = require('multer');
 const fs = require('fs');
@@ -10,7 +9,6 @@ const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 require('dotenv').config()
 
-// Store clients in a Map with their IDs
 const clients = new Map();
 
 const app = express();
@@ -20,6 +18,9 @@ const port = process.env.PORT || 8000;
 const mongoUsername = process.env.MONGO_USERNAME
 const mongoPassword = process.env.MONGO_PASSWORD
 const mongoCluster = process.env.MONGO_CLUSTER
+const mongoDatabase = process.env.MONGO_DATABASE
+
+const mongoUri = `mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/${mongoDatabase}?retryWrites=true&w=majority`;
 
 mongoose.set('debug', true);
 
@@ -38,45 +39,32 @@ const ClientModel = mongoose.model('Client', clientSchema);
 const getClientData = async (clientId) => {
     if (!mongoose.connection.readyState) {
         console.log('MongoDB connection not established. Connecting...');
-        await mongoose.connect(
-            `mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`,
-            { useNewUrlParser: true, useUnifiedTopology: true }
-        );
+        await mongoose.connect(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true });
     }
     return await ClientModel.findOne({ clientId });
 };
 
-const loadClientsInMemory = async (clientId) => {
-    clients.set(await getClientData(clientId))
-}
-
-
 const saveClientInfo = async (clientId, sessionCollection) => {
     if (!mongoose.connection.readyState) {
         console.log('MongoDB connection not established. Connecting...');
-        await mongoose.connect(
-            `mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`,
-            { useNewUrlParser: true, useUnifiedTopology: true }
-        );
+        await mongoose.connect(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true });
     }
     await ClientModel.findOneAndUpdate(
         { clientId },
         { clientId, sessionCollection },
         { upsert: true, new: true }
     );
-};// Modified client creation function
-const createClient = async (clientId) => {
-    // Conectar a la base de datos
-    await mongoose.connect(`mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`);
+};
 
-    // Nombre dinámico para la colección de sesiones
+const createClient = async (clientId) => {
+    await mongoose.connect(mongoUri);
+
     const collectionName = `sessions_${clientId}`;
     const store = new MongoStore({
         mongoose: mongoose,
         collectionName: collectionName,
     });
 
-    // Crear cliente de WhatsApp con configuración
     const client = new Client({ 
         authStrategy: new RemoteAuth({
             store: store,
@@ -97,12 +85,10 @@ const createClient = async (clientId) => {
         },
     });
 
-    // Verifica si el cliente ya está en memoria, de lo contrario, inicializa su estructura
     if (!clients.has(clientId)) {
         clients.set(clientId, {});
     }
 
-    // Crear una promesa para manejar la generación del QR code
     const qrPromise = new Promise((resolve) => {
         client.on('qr', qr => {
             console.log(`QR Code received for client ${clientId}`);
@@ -154,7 +140,7 @@ app.post('/create-client/:clientId', async (req, res) => {
     }
 
     const existingClient = await getClientData(clientId);
-    
+
     if (existingClient) {
         return res.status(400).send('Client ID already exists');
     }
@@ -165,7 +151,6 @@ app.post('/create-client/:clientId', async (req, res) => {
 
 app.get('/qr/:clientId', async (req, res) => {
     const { clientId } = req.params;
-    // await loadClientsInMemory(clientId)
     const clientData = clients.get(clientId);
     if (clientData) {
         clientData.qrPromise.then((a) => console.log(a))
@@ -237,27 +222,27 @@ app.post('/send-message/:clientId', upload.single('image'), async (req, res) => 
 
     const media = MessageMedia.fromFilePath(imageFilePath);
 
-    numbers.forEach(number => {
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    for (const number of numbers) {
         const chatId = `${number}@c.us`;
-        clientData.client.sendMessage(chatId, media, { caption: message })
-            .then(response => {
-                console.log(`Message sent to ${number} from client ${clientId}`);
-            })
-            .catch(error => {
-                console.error(`Could not send message to ${number} from client ${clientId}:`, error);
-            });
-    });
+        try {
+            await clientData.client.sendMessage(chatId, media, { caption: message });
+            console.log(`Message sent to ${number} from client ${clientId}`);
+        } catch (error) {
+            console.error(`Could not send message to ${number} from client ${clientId}:`, error);
+        }
+        await delay(2000);
+    }
 
     fs.unlinkSync(imageFilePath);
     res.send(`Message sent to numbers: ${numbers} from client ${clientId}`);
 });
 
+
 const initializeClient = async (clientId) => {
     try {
-        const mongoUsername = process.env.MONGO_USERNAME
-        const mongoPassword = process.env.MONGO_PASSWORD
-        const mongoCluster = process.env.MONGO_CLUSTER
-        await mongoose.connect(`mongodb+srv://${mongoUsername}:${mongoPassword}@${mongoCluster}.mongodb.net/whatsapp-bot?retryWrites=true&w=majority`);
+        await mongoose.connect(mongoUri);
 
         const store = new MongoStore({ mongoose: mongoose });
 
@@ -294,7 +279,6 @@ app.get('/create-session/:clientId', async (req, res) => {
         if (!clients.has(clientId)) {
             clients.set(clientId, {});
         }
-    
         const qrPromise = new Promise((resolve) => {
             client.on('qr', qr => {
                 console.log(`QR Code received for client ${clientId}`);
@@ -302,12 +286,10 @@ app.get('/create-session/:clientId', async (req, res) => {
                 resolve(qr);
             });
         });
-    
         client.on('ready', () => {
             console.log(`Client ${clientId} is ready!`);
             clients.get(clientId).qrCode = null;
         });
-    
         client.initialize();
         clients.set(clientId, {
             client,

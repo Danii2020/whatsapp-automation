@@ -3,6 +3,7 @@
 
 ### Node ###
 # Logs
+test.pem
 logs
 *.log
 npm-debug.log*
