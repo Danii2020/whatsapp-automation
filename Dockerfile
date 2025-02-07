@@ -24,5 +24,5 @@ RUN npm install
 # Create uploads directory
 RUN rm -rf uploads && mkdir uploads
 
-EXPOSE 3000
+EXPOSE 8080
 CMD ["node", "index.js"]
