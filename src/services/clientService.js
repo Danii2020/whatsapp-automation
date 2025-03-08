@@ -1,7 +1,6 @@
 const { Client, MessageMedia, RemoteAuth } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
-const fs = require('fs');
 const qr = require('qr-image');
 const ClientModel = require('../models/clientModel');
 
@@ -98,7 +97,8 @@ class ClientService {
         qr_svg.pipe(res);
     }
 
-    async sendMessage(clientId, numbers, message, imageFilePath = null) {
+    async sendMessage(clientId, numbers, message, imageUrl = null) {
+        console.log(numbers, message)
         const clientData = this.clients.get(clientId);
         if (!clientData) {
             throw { status: 404, message: 'Client not found' };
@@ -113,8 +113,8 @@ class ClientService {
         for (const number of numbers) {
             const chatId = `${number}@c.us`;
             try {
-                if (imageFilePath) {
-                    const media = MessageMedia.fromFilePath(imageFilePath);
+                if (imageUrl) {
+                    const media = await MessageMedia.fromUrl(imageUrl);
                     await clientData.client.sendMessage(chatId, media, { caption: message });
                 } else {
                     await clientData.client.sendMessage(chatId, message);
@@ -124,10 +124,6 @@ class ClientService {
             } catch (error) {
                 console.error(`Could not send message to ${number} from client ${clientId}:`, error);
             }
-        }
-
-        if (imageFilePath) {
-            fs.unlinkSync(imageFilePath);
         }
     }
 

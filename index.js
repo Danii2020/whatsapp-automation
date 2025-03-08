@@ -7,13 +7,6 @@ require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 8080;
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = 'uploads';
-if (!fs.existsSync(uploadsDir)){
-    fs.mkdirSync(uploadsDir);
-}
-
 // Middleware
 app.use(express.json());
 app.use(cors());
