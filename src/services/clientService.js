@@ -1,8 +1,9 @@
-const { Client, MessageMedia, RemoteAuth } = require('whatsapp-web.js');
+const { MessageMedia } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 const qr = require('qr-image');
 const ClientModel = require('../models/clientModel');
+const { createWhatsAppClient } = require('../config/whatsapp');
 
 class ClientService {
     constructor() {
@@ -20,25 +21,7 @@ class ClientService {
             collectionName: collectionName,
         });
 
-        const client = new Client({
-            authStrategy: new RemoteAuth({
-                store: store,
-                backupSyncIntervalMs: 300000,
-                clientId: clientId
-            }),
-            puppeteer: {
-                headless: true,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--disable-gpu',
-                ],
-            },
-        });
+        const client = createWhatsAppClient(store, clientId);
 
         if (!this.clients.has(clientId)) {
             this.clients.set(clientId, {});
@@ -56,7 +39,6 @@ class ClientService {
             console.log(`Client ${clientId} is ready!`);
             this.clients.get(clientId).qrCode = null;
             return { status: 200, message: 'Client is ready' };
-
         });
 
         client.on('remote_session_saved', () => {
